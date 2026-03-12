@@ -11,12 +11,13 @@ const SERPER_URL = "https://google.serper.dev/search";
 /**
  * Detect which job board a URL belongs to.
  */
-export function detectSource(url: string): "Ashby" | "Greenhouse" | "Unknown" {
+export function detectSource(url: string): "Ashby" | "Greenhouse" | "Lever" | "Unknown" {
   try {
     const hostname = new URL(url).hostname;
     if (hostname === "jobs.ashbyhq.com") return "Ashby";
     if (hostname === "jobs.greenhouse.io" || hostname === "boards.greenhouse.io")
       return "Greenhouse";
+    if (hostname === "jobs.lever.co") return "Lever";
     return "Unknown";
   } catch {
     return "Unknown";
@@ -76,7 +77,8 @@ export function parseJobTitle(rawTitle: string, companyName: string): string {
         afterSep.includes("jobs") ||
         afterSep.includes("careers") ||
         afterSep.includes("ashby") ||
-        afterSep.includes("greenhouse")
+        afterSep.includes("greenhouse") ||
+        afterSep.includes("lever")
       ) {
         title = title.slice(0, idx).trim();
         break;
@@ -102,9 +104,9 @@ export function parseLocation(title: string, snippet: string): string {
     /Location[.:]\s*([A-Z][A-Za-z\s,]+?)(?:\.|Employment|$)/
   );
 
-  // US states: "City, ST" pattern
+  // US states: "City, ST" pattern — restricted to real state abbreviations
   const usLocationMatch = text.match(
-    /\b([A-Z][a-z]+(?:\s[A-Z][a-z]+)*),\s*([A-Z]{2})\b/
+    /\b([A-Z][a-z]+(?:\s[A-Z][a-z]+)*),\s*(AL|AK|AZ|AR|CA|CO|CT|DE|FL|GA|HI|ID|IL|IN|IA|KS|KY|LA|ME|MD|MA|MI|MN|MS|MO|MT|NE|NV|NH|NJ|NM|NY|NC|ND|OH|OK|OR|PA|RI|SC|SD|TN|TX|UT|VT|VA|WA|WV|WI|WY|DC)\b/
   );
 
   // Known major cities
@@ -246,6 +248,7 @@ function parseGreenhouseUrl(url: string): { slug: string; jobId: string } | null
 interface EnrichmentData {
   location?: string;
   description?: string;
+  logoUrl?: string;
 }
 
 /**
@@ -293,6 +296,7 @@ async function fetchAshbyData(
             variables: { organizationHostedJobsPageName: slug },
             query: `query ApiJobBoardWithTeams($organizationHostedJobsPageName: String!) {
               jobBoard: jobBoardWithTeams(organizationHostedJobsPageName: $organizationHostedJobsPageName) {
+                organizationPhotoUrl
                 jobPostings { id title locationName }
               }
             }`,
@@ -303,6 +307,7 @@ async function fetchAshbyData(
       if (!resp.ok) return;
 
       const data = await resp.json();
+      const logoUrl: string | undefined = data?.data?.jobBoard?.organizationPhotoUrl || undefined;
       const postings: { id: string; title: string; locationName: string }[] =
         data?.data?.jobBoard?.jobPostings || [];
 
@@ -310,8 +315,11 @@ async function fetchAshbyData(
         const segments = new URL(job.url).pathname.split("/").filter(Boolean);
         const jobId = segments[1];
         const posting = postings.find((p) => p.id === jobId);
-        if (posting?.locationName) {
-          dataMap.set(job.url, { location: posting.locationName });
+        const enrichment: EnrichmentData = {};
+        if (posting?.locationName) enrichment.location = posting.locationName;
+        if (logoUrl) enrichment.logoUrl = logoUrl;
+        if (Object.keys(enrichment).length > 0) {
+          dataMap.set(job.url, enrichment);
         }
       }
     } catch {
@@ -375,10 +383,25 @@ async function fetchGreenhouseData(
   results: JobResult[]
 ): Promise<Map<string, EnrichmentData>> {
   const dataMap = new Map<string, EnrichmentData>();
+  const ghResults = results.filter((r) => r.source === "Greenhouse");
 
-  const fetches = results
-    .filter((r) => r.source === "Greenhouse")
-    .map(async (r) => {
+  // Fetch board-level logo per company slug
+  const slugs = new Set(ghResults.map((r) => parseGreenhouseUrl(r.url)?.slug).filter(Boolean) as string[]);
+  const logoMap = new Map<string, string>();
+  const logoFetches = Array.from(slugs).map(async (slug) => {
+    try {
+      const resp = await fetch(
+        `https://boards-api.greenhouse.io/v1/boards/${slug}`,
+        { signal: AbortSignal.timeout(5000) }
+      );
+      if (!resp.ok) return;
+      const data = await resp.json();
+      if (data?.logo) logoMap.set(slug, data.logo);
+    } catch { /* ignore */ }
+  });
+  await Promise.allSettled(logoFetches);
+
+  const fetches = ghResults.map(async (r) => {
       const parsed = parseGreenhouseUrl(r.url);
       if (!parsed) return;
 
@@ -397,6 +420,8 @@ async function fetchGreenhouseData(
         if (!r.snippet && data?.content) {
           enrichment.description = htmlToSnippet(data.content);
         }
+        const logo = logoMap.get(parsed.slug);
+        if (logo) enrichment.logoUrl = logo;
         dataMap.set(r.url, enrichment);
       } catch {
         // Ignore — keep existing data
@@ -408,21 +433,79 @@ async function fetchGreenhouseData(
 }
 
 /**
- * Enrich results with real location and description data from Ashby/Greenhouse APIs.
+ * Parse the Lever company slug and job ID from a URL.
+ * e.g. https://jobs.lever.co/stripe/abc-123-def → { slug: "stripe", jobId: "abc-123-def" }
+ */
+function parseLeverUrl(url: string): { slug: string; jobId: string } | null {
+  try {
+    const segments = new URL(url).pathname.split("/").filter(Boolean);
+    if (segments.length >= 2) {
+      return { slug: segments[0], jobId: segments[1] };
+    }
+    return null;
+  } catch {
+    return null;
+  }
+}
+
+/**
+ * Fetch location + description for Lever results via their public API.
+ * API: https://api.lever.co/v0/postings/{company}/{jobId}
+ */
+async function fetchLeverData(
+  results: JobResult[]
+): Promise<Map<string, EnrichmentData>> {
+  const dataMap = new Map<string, EnrichmentData>();
+
+  const fetches = results
+    .filter((r) => r.source === "Lever")
+    .map(async (r) => {
+      const parsed = parseLeverUrl(r.url);
+      if (!parsed) return;
+
+      try {
+        const resp = await fetch(
+          `https://api.lever.co/v0/postings/${parsed.slug}/${parsed.jobId}`,
+          { signal: AbortSignal.timeout(5000) }
+        );
+        if (!resp.ok) return;
+
+        const data = await resp.json();
+        const enrichment: EnrichmentData = {};
+        if (data?.categories?.location) {
+          enrichment.location = data.categories.location;
+        }
+        if (!r.snippet && data?.descriptionPlain) {
+          enrichment.description = data.descriptionPlain.slice(0, 200).replace(/\s\S*$/, "") + "...";
+        }
+        dataMap.set(r.url, enrichment);
+      } catch {
+        // Ignore
+      }
+    });
+
+  await Promise.allSettled(fetches);
+  return dataMap;
+}
+
+/**
+ * Enrich results with real location and description data from Ashby/Greenhouse/Lever APIs.
  */
 async function enrichResults(results: JobResult[]): Promise<JobResult[]> {
-  const [ashbyMap, greenhouseMap] = await Promise.all([
+  const [ashbyMap, greenhouseMap, leverMap] = await Promise.all([
     fetchAshbyData(results),
     fetchGreenhouseData(results),
+    fetchLeverData(results),
   ]);
 
   return results.map((r) => {
-    const data = ashbyMap.get(r.url) || greenhouseMap.get(r.url);
+    const data = ashbyMap.get(r.url) || greenhouseMap.get(r.url) || leverMap.get(r.url);
     if (!data) return r;
 
     const updates: Partial<JobResult> = {};
     if (data.location) updates.location = data.location;
     if (!r.snippet && data.description) updates.snippet = data.description;
+    if (data.logoUrl) updates.logoUrl = data.logoUrl;
 
     return Object.keys(updates).length > 0 ? { ...r, ...updates } : r;
   });
@@ -432,7 +515,7 @@ async function enrichResults(results: JobResult[]): Promise<JobResult[]> {
  * Build search query with site: operators for Ashby and Greenhouse.
  */
 export function buildSearchQuery(userQuery: string): string {
-  return `(site:jobs.ashbyhq.com OR site:jobs.greenhouse.io OR site:boards.greenhouse.io) "${userQuery}"`;
+  return `(site:jobs.ashbyhq.com OR site:jobs.greenhouse.io OR site:boards.greenhouse.io OR site:jobs.lever.co) "${userQuery}"`;
 }
 
 /**

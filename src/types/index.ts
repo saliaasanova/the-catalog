@@ -8,6 +8,7 @@ export interface JobResult {
   snippet: string;
   url: string;
   source: string;
+  logoUrl?: string;
 }
 
 // The response shape from our /api/search endpoint

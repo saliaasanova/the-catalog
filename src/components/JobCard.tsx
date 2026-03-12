@@ -19,6 +19,9 @@ function slugToColor(slug: string): string {
 export default function JobCard({ job }: JobCardProps) {
   const [imgError, setImgError] = useState(false);
 
+  const logoSrc = job.logoUrl
+    || `https://www.google.com/s2/favicons?domain=${job.companySlug}.com&sz=32`;
+
   return (
     <a
       href={job.url}
@@ -31,7 +34,7 @@ export default function JobCard({ job }: JobCardProps) {
           <span className="inline-flex items-center gap-1.5 align-baseline">
             {!imgError ? (
               <img
-                src={`https://www.google.com/s2/favicons?domain=${job.companySlug}.com&sz=32`}
+                src={logoSrc}
                 alt=""
                 width={14}
                 height={14}

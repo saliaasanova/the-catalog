@@ -6,6 +6,7 @@ interface JobListProps {
   totalResults: number;
   searchTime: number;
   query: string;
+  hasMore?: boolean;
 }
 
 export default function JobList({
@@ -13,6 +14,7 @@ export default function JobList({
   totalResults,
   searchTime,
   query,
+  hasMore,
 }: JobListProps) {
   return (
     <div className="w-full">
@@ -46,11 +48,13 @@ export default function JobList({
       </div>
 
       {/* Bottom rule */}
-      <div className="mt-3 border-t border-border pt-1">
-        <p className="text-[9px] font-mono text-text-muted text-center tracking-wider uppercase">
-          End of listings &bull; {searchTime.toFixed(2)}s
-        </p>
-      </div>
+      {!hasMore && (
+        <div className="mt-3 border-t border-border pt-1">
+          <p className="text-[9px] font-mono text-text-muted text-center tracking-wider uppercase">
+            End of listings &bull; {searchTime.toFixed(2)}s
+          </p>
+        </div>
+      )}
     </div>
   );
 }

@@ -25,20 +25,48 @@ const SUGGESTED_SEARCHES = [
 
 /**
  * Normalize location strings to reduce duplicates in filter chips.
- * e.g. "San Francisco / Bay Area" → "San Francisco"
+ * e.g. "San Francisco / Bay Area" → "San Francisco", "NYC Hybrid" → "New York"
  */
 function normalizeLocation(loc: string): string {
+  // Multi-location strings (semicolon-separated) — take only the first city
+  if (loc.includes(";")) {
+    loc = loc.split(";")[0].trim();
+  }
+
+  // Split on middot separator (used by parseLocation to join "City · Remote")
+  // and strip workplace-type segments
+  const segments = loc.split(/\s*\u00b7\s*/).filter(
+    (s) => !/^(Remote|Hybrid|On[- ]?site|In[- ]?Person|Fully\s*Remote|Remote[- ]?first)\s*$/i.test(s.trim())
+  );
+  loc = segments[0]?.trim() || loc;
+
   let normalized = loc
     .replace(/\s*\/\s*Bay\s*(Area)?/i, "")
     .replace(/\s*Bay\s*Area/i, "")
     .replace(/\s*\(HQ\)/i, "")
-    .replace(/,\s*(California|New York|Texas|Washington|Massachusetts|Colorado|Illinois|Georgia|Pennsylvania|Virginia|Florida|Oregon)$/i, "")
-    .replace(/,\s*(CA|NY|TX|WA|MA|CO|IL|GA|PA|VA|FL|OR|DC)$/i, "")
+    .replace(/^#?HQ\s*[-–—]\s*/i, "")
+    .replace(/\s+Office$/i, "")
+    .replace(/[,\s]*(Hybrid|On[- ]?site|In[- ]?Person)\s*$/i, "")
+    .replace(/\s*,\s*(California|New York|Texas|Washington|Massachusetts|Colorado|Illinois|Georgia|Pennsylvania|Virginia|Florida|Oregon|USA|U\.S\.A?\.?)$/i, "")
+    .replace(/\s*,\s*(CA|NY|TX|WA|MA|CO|IL|GA|PA|VA|FL|OR|DC)$/i, "")
+    // Clean any leftover middots or trailing punctuation
+    .replace(/[\s·]+$/g, "")
     .trim();
 
-  // Normalize NYC variants
-  if (/^(NYC|New York City)$/i.test(normalized)) {
+  if (/^(NYC|New York\s*City|New York,?\s*New York.*)$/i.test(normalized)) {
     normalized = "New York";
+  }
+
+  if (/^(SF|San Francisco\s*(or|\/|&)\s*.+)$/i.test(normalized)) {
+    normalized = "San Francisco";
+  }
+
+  if (/^(Remote|Globally\s*Remote|U\.?S\.?\s*Remote)\b/i.test(normalized)) {
+    normalized = "Remote";
+  }
+
+  if (/^(North America|NAMER)$/i.test(normalized)) {
+    normalized = "North America";
   }
 
   return normalized;
@@ -52,7 +80,7 @@ export default function Home() {
   const [isLoading, setIsLoading] = useState(false);
   const [error, setError] = useState<string | null>(null);
   const [hasSearched, setHasSearched] = useState(false);
-  const [locationFilter, setLocationFilter] = useState("");
+  const [locationFilters, setLocationFilters] = useState<Set<string>>(new Set());
   const [page, setPage] = useState(1);
   const [isLoadingMore, setIsLoadingMore] = useState(false);
   const [hasMore, setHasMore] = useState(true);
@@ -79,7 +107,7 @@ export default function Home() {
       setResults(data.results);
       setTotalResults(data.totalResults);
       setSearchTime(data.searchTime);
-      setLocationFilter("");
+      setLocationFilters(new Set());
       setPage(1);
       setHasMore(data.results.length > 0);
     } catch (err) {
@@ -126,14 +154,16 @@ export default function Home() {
   for (const r of results) {
     if (!r.location) continue;
     const norm = normalizeLocation(r.location);
+    // Skip locations that are too long (multi-location dumps) or look like company names
+    if (norm.length > 40 || /^all\s/i.test(norm)) continue;
     if (!locationMap.has(norm)) {
       locationMap.set(norm, r.location);
     }
   }
   const locations = Array.from(locationMap.keys()).sort();
 
-  const filteredResults = locationFilter
-    ? results.filter((r) => normalizeLocation(r.location) === locationFilter)
+  const filteredResults = locationFilters.size > 0
+    ? results.filter((r) => locationFilters.has(normalizeLocation(r.location)))
     : results;
 
   return (
@@ -152,27 +182,50 @@ export default function Home() {
             <div className="mb-5 flex items-center gap-3">
               <div className="h-px w-8 bg-border-dark" />
               <span className="text-[10px] uppercase tracking-[0.3em] text-text-dim font-mono">
-                Est. 2025
+                Est. 2026
               </span>
               <div className="h-px w-8 bg-border-dark" />
             </div>
           )}
 
-          <h1
-            onClick={() => {
-              setHasSearched(false);
-              setResults([]);
-              setQuery("");
-              setError(null);
-              setLocationFilter("");
-              setHasMore(true);
-            }}
-            className={`font-display font-bold tracking-tight text-text transition-all duration-500 ${
-              hasSearched ? "text-xl cursor-pointer hover:text-accent" : "text-4xl sm:text-5xl"
-            }`}
-          >
-            The Catalog
-          </h1>
+          <div className={`flex items-center ${hasSearched ? "gap-3" : ""}`}>
+            {hasSearched && (
+              <button
+                onClick={() => {
+                  setHasSearched(false);
+                  setResults([]);
+                  setQuery("");
+                  setError(null);
+                  setLocationFilters(new Set());
+                  setHasMore(true);
+                }}
+                className="text-text-dim hover:text-accent transition-colors duration-200"
+                aria-label="Back to home"
+              >
+                <svg xmlns="http://www.w3.org/2000/svg" width="20" height="20" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round">
+                  <path d="M19 12H5" />
+                  <path d="m12 19-7-7 7-7" />
+                </svg>
+              </button>
+            )}
+            <h1
+              onClick={() => {
+                if (hasSearched) {
+                  setHasSearched(false);
+                  setResults([]);
+                  setQuery("");
+                  setError(null);
+                  setLocationFilters(new Set());
+                  setHasMore(true);
+                }
+              }}
+              className={`font-display font-bold tracking-tight text-text transition-all duration-500 ${
+                hasSearched ? "text-xl cursor-pointer hover:text-accent" : "text-4xl sm:text-5xl"
+              }`}
+            >
+              The Catalog
+            </h1>
+          </div>
 
           {!hasSearched && (
             <>
@@ -232,9 +285,9 @@ export default function Home() {
               Location:
             </span>
             <button
-              onClick={() => setLocationFilter("")}
+              onClick={() => setLocationFilters(new Set())}
               className={`px-2.5 py-1 text-[11px] font-mono border transition-colors duration-200 ${
-                !locationFilter
+                locationFilters.size === 0
                   ? "border-accent text-accent bg-bg-card"
                   : "border-border text-text-dim hover:border-accent hover:text-accent"
               }`}
@@ -245,10 +298,18 @@ export default function Home() {
               <button
                 key={loc}
                 onClick={() =>
-                  setLocationFilter(loc === locationFilter ? "" : loc)
+                  setLocationFilters((prev) => {
+                    const next = new Set(prev);
+                    if (next.has(loc)) {
+                      next.delete(loc);
+                    } else {
+                      next.add(loc);
+                    }
+                    return next;
+                  })
                 }
                 className={`px-2.5 py-1 text-[11px] font-mono border transition-colors duration-200 ${
-                  locationFilter === loc
+                  locationFilters.has(loc)
                     ? "border-accent text-accent bg-bg-card"
                     : "border-border text-text-dim hover:border-accent hover:text-accent"
                 }`}
@@ -276,14 +337,15 @@ export default function Home() {
         {!isLoading && !error && filteredResults.length > 0 && (
           <JobList
             jobs={filteredResults}
-            totalResults={locationFilter ? filteredResults.length : totalResults}
+            totalResults={locationFilters.size > 0 ? filteredResults.length : totalResults}
             searchTime={searchTime}
             query={query}
+            hasMore={hasMore && locationFilters.size === 0}
           />
         )}
 
         {/* Load More */}
-        {!isLoading && !error && results.length > 0 && hasMore && !locationFilter && (
+        {!isLoading && !error && results.length > 0 && hasMore && locationFilters.size === 0 && (
           <div className="mt-6 flex justify-center">
             <button
               onClick={loadMore}
