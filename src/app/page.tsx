@@ -81,7 +81,7 @@ export default function Home() {
       setSearchTime(data.searchTime);
       setLocationFilter("");
       setPage(1);
-      setHasMore(data.results.length >= 30);
+      setHasMore(data.results.length > 0);
     } catch (err) {
       setError(
         err instanceof Error ? err.message : "An unexpected error occurred"
@@ -105,13 +105,15 @@ export default function Home() {
       if (!response.ok) throw new Error("Failed to load more");
 
       const data: SearchResponse = await response.json();
+      let newCount = 0;
       setResults((prev) => {
         const existingIds = new Set(prev.map((r) => r.id));
         const newResults = data.results.filter((r) => !existingIds.has(r.id));
+        newCount = newResults.length;
         return [...prev, ...newResults];
       });
       setPage(page + 1);
-      setHasMore(data.results.length >= 10);
+      setHasMore(data.results.length >= 10 && newCount > 0);
     } catch {
       // silently fail — user can retry
     } finally {
@@ -157,8 +159,16 @@ export default function Home() {
           )}
 
           <h1
+            onClick={() => {
+              setHasSearched(false);
+              setResults([]);
+              setQuery("");
+              setError(null);
+              setLocationFilter("");
+              setHasMore(true);
+            }}
             className={`font-display font-bold tracking-tight text-text transition-all duration-500 ${
-              hasSearched ? "text-xl" : "text-4xl sm:text-5xl"
+              hasSearched ? "text-xl cursor-pointer hover:text-accent" : "text-4xl sm:text-5xl"
             }`}
           >
             The Catalog
