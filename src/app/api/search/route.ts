@@ -41,10 +41,10 @@ export async function GET(request: NextRequest) {
   }
 
   const countParam = searchParams.get("count");
-  const count = countParam ? parseInt(countParam, 10) : 30;
+  const count = countParam ? parseInt(countParam, 10) : 50;
 
   try {
-    const data = await searchJobs(query.trim(), start, Math.min(count, 30));
+    const data = await searchJobs(query.trim(), start, Math.min(count, 50));
     return NextResponse.json(data);
   } catch (error) {
     const message =

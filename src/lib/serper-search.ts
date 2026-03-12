@@ -432,7 +432,7 @@ async function enrichResults(results: JobResult[]): Promise<JobResult[]> {
  * Build search query with site: operators for Ashby and Greenhouse.
  */
 export function buildSearchQuery(userQuery: string): string {
-  return `(site:jobs.ashbyhq.com OR site:jobs.greenhouse.io OR site:boards.greenhouse.io) ("${userQuery}") ("hiring" OR "apply" OR "open role")`;
+  return `(site:jobs.ashbyhq.com OR site:jobs.greenhouse.io OR site:boards.greenhouse.io) "${userQuery}"`;
 }
 
 /**
@@ -472,7 +472,7 @@ async function fetchSerperPage(
 export async function searchJobs(
   query: string,
   start: number = 1,
-  count: number = 30
+  count: number = 50
 ): Promise<SearchResponse> {
   if (!SERPER_API_KEY) {
     throw new Error(
