@@ -512,10 +512,21 @@ async function enrichResults(results: JobResult[]): Promise<JobResult[]> {
 }
 
 /**
- * Build search query with site: operators for Ashby and Greenhouse.
+ * Site queries — each board gets its own Google search so we can extract
+ * up to ~100 results per board instead of ~100 total across all boards.
  */
-export function buildSearchQuery(userQuery: string): string {
-  return `(site:jobs.ashbyhq.com OR site:jobs.greenhouse.io OR site:boards.greenhouse.io OR site:jobs.lever.co) "${userQuery}"`;
+const SITE_QUERIES = [
+  "site:jobs.ashbyhq.com",
+  "(site:jobs.greenhouse.io OR site:boards.greenhouse.io)",
+  "site:jobs.lever.co",
+];
+
+/**
+ * Build search query for a specific site group.
+ */
+export function buildSearchQuery(userQuery: string, siteFilter?: string): string {
+  const site = siteFilter || SITE_QUERIES.join(" OR ");
+  return `${site} "${userQuery}"`;
 }
 
 /**
@@ -549,13 +560,45 @@ async function fetchSerperPage(
 }
 
 /**
+ * Fetch results for a single site group, paginating through multiple pages.
+ */
+async function fetchSiteResults(
+  userQuery: string,
+  siteFilter: string,
+  pagesPerSite: number,
+  startPage: number
+): Promise<{ items: JobResult[]; totalResults: number; searchTime: number }> {
+  const searchQuery = buildSearchQuery(userQuery, siteFilter);
+  const pagePromises = Array.from({ length: pagesPerSite }, (_, i) =>
+    fetchSerperPage(searchQuery, startPage + i).catch(() => null)
+  );
+  const pages = await Promise.all(pagePromises);
+
+  const items: JobResult[] = [];
+  let totalResults = 0;
+  let searchTime = 0;
+
+  for (const data of pages) {
+    if (!data) continue;
+    totalResults = data.searchInformation?.totalResults || totalResults;
+    searchTime = Math.max(searchTime, data.searchInformation?.timeTaken || 0);
+    for (const item of data.organic || []) {
+      items.push(transformItem(item));
+    }
+  }
+
+  return { items, totalResults, searchTime };
+}
+
+/**
  * Execute a search against the Serper.dev API.
- * Fetches `count` results (default 30) by making parallel page requests.
+ * Runs separate queries per job board in parallel to maximize coverage,
+ * then merges and deduplicates results.
  */
 export async function searchJobs(
   query: string,
   start: number = 1,
-  count: number = 50
+  count: number = 100
 ): Promise<SearchResponse> {
   if (!SERPER_API_KEY) {
     throw new Error(
@@ -563,29 +606,28 @@ export async function searchJobs(
     );
   }
 
-  const searchQuery = buildSearchQuery(query);
   const startPage = Math.ceil(start / 10);
-  const numPages = Math.ceil(count / 10);
+  const pagesPerSite = Math.ceil(count / 10 / SITE_QUERIES.length);
 
-  // Fetch pages in parallel
-  const pagePromises = Array.from({ length: numPages }, (_, i) =>
-    fetchSerperPage(searchQuery, startPage + i)
+  // Run all site queries in parallel
+  const sitePromises = SITE_QUERIES.map((site) =>
+    fetchSiteResults(query, site, pagesPerSite, startPage)
   );
-  const pages = await Promise.all(pagePromises);
+  const siteResults = await Promise.all(sitePromises);
 
-  // Merge results, dedup by URL
+  // Merge and dedup by URL
   const seen = new Set<string>();
   const allRaw: JobResult[] = [];
   let totalResults = 0;
   let searchTime = 0;
 
-  for (const data of pages) {
-    totalResults = data.searchInformation?.totalResults || totalResults;
-    searchTime = data.searchInformation?.timeTaken || searchTime;
-    for (const item of data.organic || []) {
-      if (!seen.has(item.link)) {
-        seen.add(item.link);
-        allRaw.push(transformItem(item));
+  for (const { items, totalResults: siteTotal, searchTime: siteTime } of siteResults) {
+    totalResults += siteTotal;
+    searchTime = Math.max(searchTime, siteTime);
+    for (const item of items) {
+      if (!seen.has(item.url)) {
+        seen.add(item.url);
+        allRaw.push(item);
       }
     }
   }

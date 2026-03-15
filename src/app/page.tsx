@@ -40,6 +40,9 @@ function normalizeLocation(loc: string): string {
   );
   loc = segments[0]?.trim() || loc;
 
+  // Strip "US ST City" prefix format (e.g. "US TX Austin" → "Austin")
+  loc = loc.replace(/^US\s+[A-Z]{2}\s+/i, "");
+
   let normalized = loc
     .replace(/\s*\/\s*Bay\s*(Area)?/i, "")
     .replace(/\s*Bay\s*Area/i, "")
@@ -47,22 +50,50 @@ function normalizeLocation(loc: string): string {
     .replace(/^#?HQ\s*[-–—]\s*/i, "")
     .replace(/\s+Office$/i, "")
     .replace(/[,\s]*(Hybrid|On[- ]?site|In[- ]?Person)\s*$/i, "")
-    .replace(/\s*,\s*(California|New York|Texas|Washington|Massachusetts|Colorado|Illinois|Georgia|Pennsylvania|Virginia|Florida|Oregon|USA|U\.S\.A?\.?)$/i, "")
-    .replace(/\s*,\s*(CA|NY|TX|WA|MA|CO|IL|GA|PA|VA|FL|OR|DC)$/i, "")
+    // Strip country suffixes: ", United States", ", United Kingdom", etc.
+    .replace(/\s*,\s*(United States|United Kingdom|UK|Canada|Germany|France|India|Australia|Israel|Japan|Netherlands|Ireland|Brazil|Mexico|Spain|Portugal|Switzerland|Sweden|Norway|Denmark|Finland)$/i, "")
+    // Strip state names
+    .replace(/\s*,\s*(California|New York|Texas|Washington|Massachusetts|Colorado|Illinois|Georgia|Pennsylvania|Virginia|Florida|Oregon|Ohio|Arizona|Minnesota|Connecticut|Maryland|New Jersey|North Carolina|Tennessee|Utah|Wisconsin|Michigan|Missouri|Indiana|Kentucky|Iowa|Nevada|Nebraska|Idaho|Montana|Louisiana|Oklahoma|South Carolina|Alabama|Mississippi|Hawaii|Delaware|Rhode Island|Maine|Arkansas|Wyoming|Vermont|West Virginia|New Hampshire|New Mexico|South Dakota|North Dakota|Kansas|Alaska|USA|U\.S\.A?\.?)$/i, "")
+    // Strip state abbreviations
+    .replace(/\s*,\s*[A-Z]{2}$/i, "")
+    // Strip region/country qualifiers like "England" in "London,England"
+    .replace(/\s*,\s*[A-Z][a-z]+(?:\s[A-Z][a-z]+)*$/i, "")
     // Clean any leftover middots or trailing punctuation
     .replace(/[\s·]+$/g, "")
     .trim();
 
+  // NYC / New York City variants
   if (/^(NYC|New York\s*City|New York,?\s*New York.*)$/i.test(normalized)) {
     normalized = "New York";
   }
 
+  // SF variants
   if (/^(SF|San Francisco\s*(or|\/|&)\s*.+)$/i.test(normalized)) {
     normalized = "San Francisco";
   }
 
-  if (/^(Remote|Globally\s*Remote|U\.?S\.?\s*Remote)\b/i.test(normalized)) {
+  // All remote variants → "Remote"
+  if (/^(Remote|Globally?\s*Remote|U\.?S\.?\s*Remote|CAN\s*&?\s*US\s*Remote|US[,\s]*Remote|Fully\s*Remote|Global\s*Remote|Remote\s*-?\s*US)\b/i.test(normalized)) {
     normalized = "Remote";
+  }
+
+  // "Anywhere in ..." → country
+  if (/^Anywhere\s+in\s+the\s+United\s+States$/i.test(normalized)) {
+    normalized = "United States";
+  }
+  if (/^Anywhere\s+in\s+/i.test(normalized)) {
+    normalized = normalized.replace(/^Anywhere\s+in\s+/i, "").trim();
+  }
+
+  // "City/City" multi-city → take first
+  if (/^[A-Z][a-z]+\s*\/\s*[A-Z][a-z]+/.test(normalized)) {
+    normalized = normalized.split("/")[0].trim();
+  }
+
+  // Deduplicate "Singapore, Singapore" → "Singapore"
+  const commaParts = normalized.split(/\s*,\s*/);
+  if (commaParts.length === 2 && commaParts[0].toLowerCase() === commaParts[1].toLowerCase()) {
+    normalized = commaParts[0];
   }
 
   if (/^(North America|NAMER)$/i.test(normalized)) {
@@ -127,7 +158,7 @@ export default function Home() {
     try {
       const startFrom = results.length + 1;
       const response = await fetch(
-        `/api/search?q=${encodeURIComponent(query)}&start=${startFrom}&count=10`
+        `/api/search?q=${encodeURIComponent(query)}&start=${startFrom}&count=100`
       );
 
       if (!response.ok) throw new Error("Failed to load more");
@@ -141,7 +172,7 @@ export default function Home() {
         return [...prev, ...newResults];
       });
       setPage(page + 1);
-      setHasMore(data.results.length >= 10 && newCount > 0);
+      setHasMore(data.results.length >= 20 && newCount > 0);
     } catch {
       // silently fail — user can retry
     } finally {
@@ -239,6 +270,10 @@ export default function Home() {
                 <span className="text-text-muted text-xs">&bull;</span>
                 <span className="text-[9px] uppercase tracking-[0.2em] text-text-muted border border-border px-2 py-0.5 font-mono">
                   Greenhouse
+                </span>
+                <span className="text-text-muted text-xs">&bull;</span>
+                <span className="text-[9px] uppercase tracking-[0.2em] text-text-muted border border-border px-2 py-0.5 font-mono">
+                  Lever
                 </span>
                 <span className="text-text-muted text-xs">&bull;</span>
                 <span className="text-[9px] uppercase tracking-[0.2em] text-text-muted border border-border px-2 py-0.5 font-mono">
@@ -367,7 +402,7 @@ export default function Home() {
         {/* Footer */}
         <footer className="py-8 mt-16 text-center border-t-2 border-border">
           <p className="text-[10px] text-text-muted font-mono tracking-[0.15em] uppercase">
-            Data from Ashby &amp; Greenhouse
+            Data from Ashby, Greenhouse &amp; Lever
           </p>
         </footer>
       </main>

@@ -30,21 +30,21 @@ export async function GET(request: NextRequest) {
   }
 
   const start = startParam ? parseInt(startParam, 10) : 1;
-  if (isNaN(start) || start < 1 || start > 91) {
+  if (isNaN(start) || start < 1 || start > 200) {
     return NextResponse.json(
       {
         error: "Invalid start parameter",
-        details: "Must be between 1 and 91.",
+        details: "Must be between 1 and 200.",
       } satisfies SearchError,
       { status: 400 }
     );
   }
 
   const countParam = searchParams.get("count");
-  const count = countParam ? parseInt(countParam, 10) : 50;
+  const count = countParam ? parseInt(countParam, 10) : 100;
 
   try {
-    const data = await searchJobs(query.trim(), start, Math.min(count, 50));
+    const data = await searchJobs(query.trim(), start, Math.min(count, 100));
     return NextResponse.json(data);
   } catch (error) {
     const message =
