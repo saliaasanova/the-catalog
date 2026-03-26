@@ -40,12 +40,13 @@ export function parseCompanyFromUrl(url: string): {
 } {
   try {
     const parsed = new URL(url);
-    const pathSegments = parsed.pathname.split("/").filter(Boolean);
+    const pathSegments = decodeURIComponent(parsed.pathname).split("/").filter(Boolean);
     const slug = pathSegments[0] || "unknown";
 
     // Convert slug to display name: "my-company" -> "My Company"
     const company = slug
-      .split("-")
+      .replace(/%20/g, " ")
+      .split(/[-\s]+/)
       .map((word) => word.charAt(0).toUpperCase() + word.slice(1))
       .join(" ");
 
@@ -62,7 +63,7 @@ export function parseCompanyFromUrl(url: string): {
 export function parseJobTitle(rawTitle: string, companyName: string): string {
   let title = rawTitle;
 
-  const separators = [" - ", " | ", " — ", " at "];
+  const separators = [" - ", " | ", " — ", " at ", " @ "];
   for (const sep of separators) {
     const idx = title.lastIndexOf(sep);
     if (idx > 0) {
@@ -546,6 +547,7 @@ async function fetchSerperPage(
       q: searchQuery,
       num: 10,
       page,
+      tbs: "qdr:w",
     }),
   });
 
