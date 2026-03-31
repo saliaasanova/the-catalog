@@ -26,13 +26,6 @@ export function detectSource(url: string): "Ashby" | "Greenhouse" | "Lever" | "U
 
 /**
  * Parse company name from a job board URL.
- *
- * URL patterns:
- *   https://jobs.ashbyhq.com/openai/abc-123-def
- *   https://jobs.greenhouse.io/hashicorp/jobs/123456
- *   https://boards.greenhouse.io/ramp/jobs/789012
- *
- * The company slug is always the first path segment after the domain.
  */
 export function parseCompanyFromUrl(url: string): {
   company: string;
@@ -43,7 +36,6 @@ export function parseCompanyFromUrl(url: string): {
     const pathSegments = decodeURIComponent(parsed.pathname).split("/").filter(Boolean);
     const slug = pathSegments[0] || "unknown";
 
-    // Convert slug to display name: "my-company" -> "My Company"
     const company = slug
       .replace(/%20/g, " ")
       .split(/[-\s]+/)
@@ -58,7 +50,6 @@ export function parseCompanyFromUrl(url: string): {
 
 /**
  * Clean up the job title from search result title.
- * Strips company suffix if present.
  */
 export function parseJobTitle(rawTitle: string, companyName: string): string {
   let title = rawTitle;
@@ -100,22 +91,18 @@ export function parseLocation(title: string, snippet: string): string {
     /\b(fully remote|remote[- ]?first|remote|hybrid|on[- ]?site)\b/i
   );
 
-  // Ashby/Greenhouse format: "Location. NYC" or "Location. San Francisco"
   const labeledLocationMatch = text.match(
     /Location[.:]\s*([A-Z][A-Za-z\s,]+?)(?:\.|Employment|$)/
   );
 
-  // US states: "City, ST" pattern — restricted to real state abbreviations
   const usLocationMatch = text.match(
     /\b([A-Z][a-z]+(?:\s[A-Z][a-z]+)*),\s*(AL|AK|AZ|AR|CA|CO|CT|DE|FL|GA|HI|ID|IL|IN|IA|KS|KY|LA|ME|MD|MA|MI|MN|MS|MO|MT|NE|NV|NH|NJ|NM|NY|NC|ND|OH|OK|OR|PA|RI|SC|SD|TN|TX|UT|VT|VA|WA|WV|WI|WY|DC)\b/
   );
 
-  // Known major cities
   const cityMatch = text.match(
     /\b(San Francisco|New York|NYC|Los Angeles|Chicago|Seattle|Austin|Boston|Denver|Miami|Portland|London|Berlin|Paris|Toronto|Singapore|Tokyo|Sydney|Dublin|Amsterdam|Tel Aviv|Bangalore|Bengaluru|Stockholm|Copenhagen|Helsinki|Oslo|Munich|Zurich|Barcelona|Madrid|Lisbon|Seoul|Shanghai|Beijing|Hong Kong|Melbourne|Vancouver|Montreal|Washington DC|Philadelphia|Atlanta|Dallas|Houston|Minneapolis|Detroit|Sao Paulo|Mexico City)\b/i
   );
 
-  // Country names
   const countryMatch = text.match(
     /\b(United States|USA|UK|United Kingdom|Canada|Germany|France|India|Australia|Israel|Japan|Singapore|Sweden|Denmark|Finland|Norway|Switzerland|Spain|Portugal|South Korea|China|Brazil|Mexico|Netherlands|Ireland)\b/i
   );
@@ -145,63 +132,42 @@ export function parseLocation(title: string, snippet: string): string {
 }
 
 /**
- * Strip metadata boilerplate from Serper snippets, keeping only the
- * actual job description text.
- *
- * Typical raw snippets look like:
- *   "Software Engineer. Location. McLean, VA. Employment Type. Full time. Location Type ... Apply for this Job."
- *   "Product Manager. Location. Stockholm. Employment Type. Full ... We treat all candidates equally..."
+ * Strip metadata boilerplate from search snippets.
  */
 function cleanSnippet(snippet: string, title: string, company: string): string {
   let s = snippet;
 
-  // Strip leading/trailing ellipsis first so title regex ^ anchors work
   s = s.replace(/^\.{2,}\s*/, "");
   s = s.replace(/\s*\.{2,}$/, "");
 
-  // Remove leading job title — use the base title (before @ / at / | / —)
   const baseTitle = title.split(/\s+[@|—]\s+|\s+at\s+/i)[0].trim();
   if (baseTitle) {
     const baseTitleEscaped = baseTitle.replace(/[.*+?^${}()|[\]\\]/g, "\\$&");
-    // Match the base title (possibly with extra words like "- Hybrid", ", International Growth") then a period/ellipsis
     s = s.replace(new RegExp(`^${baseTitleEscaped}[^.]*?(?:\\.|\\.\\.\\.)\\s*`, "i"), "");
   }
 
-  // Strip dots/ellipsis again after title removal
   s = s.replace(/^\.{2,}\s*/, "");
 
-  // Remove labeled metadata fields: "Label. value." or "Label. value ..."
   s = s.replace(
     /\b(Location|Employment\s*Type|Location\s*Type|Department|Compensation|Team|Experience Level?)\s*[.:]\s*[^.]*?(?:\.\s*|\.{3}\s*|\s+(?=\b[A-Z]))/g,
     " "
   );
 
-  // Remove "Compensation Range: $XXX - $XXX." pattern (colon variant)
   s = s.replace(/Compensation\s*Range\s*:\s*[^.]+\.\s*/gi, "");
 
-  // Remove company name at the start
   const companyEscaped = company.replace(/[.*+?^${}()|[\]\\]/g, "\\$&");
   s = s.replace(new RegExp(`^${companyEscaped}[.:\\s]*`, "i"), "");
 
-  // Remove reCAPTCHA / privacy boilerplate
   s = s.replace(/This site is protected by reCAPTCHA.*$/i, "");
   s = s.replace(/Powered by\s*[·.]?\s*Privacy Policy\s*Security\s*Vulnerability\s*/gi, "");
-
-  // Remove "Apply for this Job/Role" and truncated "Apply for this" CTAs
   s = s.replace(/Apply\s+(for\s+this\s*(job|role|position)?|now)[.!]?\s*/gi, "");
-
-  // Remove trailing "Apply for this ..." or "... apply."
   s = s.replace(/\.{3}\s*$/i, "");
   s = s.replace(/\.\.\.\s*apply\.\s*$/i, "");
 
-  // Collapse whitespace and trim
   s = s.replace(/\s+/g, " ").trim();
-
-  // Remove leading/trailing punctuation left over from stripping
   s = s.replace(/^[.\-–—:,;\s]+/, "").trim();
   s = s.replace(/[.\-–—:,;\s]+$/, "").trim();
 
-  // If the cleaned snippet is too short to be meaningful, treat as empty
   if (s.length < 30) return "";
 
   return s;
@@ -231,7 +197,6 @@ function transformItem(item: SerperSearchItem): JobResult {
 
 /**
  * Parse the Greenhouse job ID from a URL.
- * e.g. https://boards.greenhouse.io/toast/jobs/7592625 → { slug: "toast", jobId: "7592625" }
  */
 function parseGreenhouseUrl(url: string): { slug: string; jobId: string } | null {
   try {
@@ -268,8 +233,6 @@ function htmlToSnippet(html: string): string {
 
 /**
  * Fetch location + description for Ashby results via their public GraphQL API.
- * Uses the batch listing query for locations, then individual queries for descriptions
- * only when the Serper snippet was empty.
  */
 async function fetchAshbyData(
   results: JobResult[]
@@ -284,7 +247,6 @@ async function fetchAshbyData(
     bySlug.set(r.companySlug, existing);
   }
 
-  // Batch fetch locations from the listing endpoint
   const locationFetches = Array.from(bySlug.entries()).map(async ([slug, jobs]) => {
     try {
       const resp = await fetch(
@@ -330,7 +292,6 @@ async function fetchAshbyData(
 
   await Promise.allSettled(locationFetches);
 
-  // Fetch descriptions individually only for results that have no snippet
   const needsDescription = results.filter(
     (r) => r.source === "Ashby" && !r.snippet
   );
@@ -386,7 +347,6 @@ async function fetchGreenhouseData(
   const dataMap = new Map<string, EnrichmentData>();
   const ghResults = results.filter((r) => r.source === "Greenhouse");
 
-  // Fetch board-level logo per company slug
   const slugs = new Set(ghResults.map((r) => parseGreenhouseUrl(r.url)?.slug).filter(Boolean) as string[]);
   const logoMap = new Map<string, string>();
   const logoFetches = Array.from(slugs).map(async (slug) => {
@@ -403,31 +363,31 @@ async function fetchGreenhouseData(
   await Promise.allSettled(logoFetches);
 
   const fetches = ghResults.map(async (r) => {
-      const parsed = parseGreenhouseUrl(r.url);
-      if (!parsed) return;
+    const parsed = parseGreenhouseUrl(r.url);
+    if (!parsed) return;
 
-      try {
-        const resp = await fetch(
-          `https://boards-api.greenhouse.io/v1/boards/${parsed.slug}/jobs/${parsed.jobId}`,
-          { signal: AbortSignal.timeout(5000) }
-        );
-        if (!resp.ok) return;
+    try {
+      const resp = await fetch(
+        `https://boards-api.greenhouse.io/v1/boards/${parsed.slug}/jobs/${parsed.jobId}`,
+        { signal: AbortSignal.timeout(5000) }
+      );
+      if (!resp.ok) return;
 
-        const data = await resp.json();
-        const enrichment: EnrichmentData = {};
-        if (data?.location?.name) {
-          enrichment.location = data.location.name;
-        }
-        if (!r.snippet && data?.content) {
-          enrichment.description = htmlToSnippet(data.content);
-        }
-        const logo = logoMap.get(parsed.slug);
-        if (logo) enrichment.logoUrl = logo;
-        dataMap.set(r.url, enrichment);
-      } catch {
-        // Ignore — keep existing data
+      const data = await resp.json();
+      const enrichment: EnrichmentData = {};
+      if (data?.location?.name) {
+        enrichment.location = data.location.name;
       }
-    });
+      if (!r.snippet && data?.content) {
+        enrichment.description = htmlToSnippet(data.content);
+      }
+      const logo = logoMap.get(parsed.slug);
+      if (logo) enrichment.logoUrl = logo;
+      dataMap.set(r.url, enrichment);
+    } catch {
+      // Ignore
+    }
+  });
 
   await Promise.allSettled(fetches);
   return dataMap;
@@ -435,7 +395,6 @@ async function fetchGreenhouseData(
 
 /**
  * Parse the Lever company slug and job ID from a URL.
- * e.g. https://jobs.lever.co/stripe/abc-123-def → { slug: "stripe", jobId: "abc-123-def" }
  */
 function parseLeverUrl(url: string): { slug: string; jobId: string } | null {
   try {
@@ -451,7 +410,6 @@ function parseLeverUrl(url: string): { slug: string; jobId: string } | null {
 
 /**
  * Fetch location + description for Lever results via their public API.
- * API: https://api.lever.co/v0/postings/{company}/{jobId}
  */
 async function fetchLeverData(
   results: JobResult[]
@@ -513,12 +471,12 @@ async function enrichResults(results: JobResult[]): Promise<JobResult[]> {
 }
 
 /**
- * Site queries — each board gets its own Google search so we can extract
- * up to ~100 results per board instead of ~100 total across all boards.
+ * Site queries — each board gets its own search so we can extract
+ * more results per board.
  */
 const SITE_QUERIES = [
   "site:jobs.ashbyhq.com",
-  "(site:jobs.greenhouse.io OR site:boards.greenhouse.io)",
+  "site:jobs.greenhouse.io OR site:boards.greenhouse.io",
   "site:jobs.lever.co",
 ];
 
